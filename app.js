@@ -364,10 +364,10 @@ function renderSourceDashboard(source, snapshot, snapshots) {
     ${kpiCardHtml("OC creadas", `${summary.conOC} (${summary.totalSolped ? Math.round(100 * summary.conOC / summary.totalSolped) : 0}%)`, `${summary.sinOC} aún sin OC`, source.color)}
     ${kpiCardHtml("Pendientes atrasadas", summary.atrasadas, `&gt; ${DIAS_ALERTA} días sin OC`, COLOR.red)}
     ${kpiCardHtml("Repuestos por recepcionar", summary.sinRecepcion, "OC creada, sin ingreso a bodega", COLOR.amber)}
-    ${kpiCardHtml("Tiempo aprobación", summary.avgAprobacion !== null ? `${summary.avgAprobacion} d` : "—", "Solicitud → liberación", COLOR.blue)}
-    ${kpiCardHtml("Tiempo generación OC", summary.avgGeneracionOC !== null ? `${summary.avgGeneracionOC} d` : "—", "Liberación → OC", source.color)}
-    ${kpiCardHtml("Tiempo liberación OC", summary.avgLiberacionOC !== null ? `${summary.avgLiberacionOC} d` : "—", "OC creada → OC liberada", COLOR.amber)}
-    ${kpiCardHtml("Tiempo recepción", summary.avgRecepcion !== null ? `${summary.avgRecepcion} d` : "—", "OC liberada → ingreso a bodega", COLOR.purple)}
+    ${kpiCardHtml("Tiempo aprobación", summary.avgAprobacion != null ? `${summary.avgAprobacion} d` : "—", "Solicitud → liberación", COLOR.blue)}
+    ${kpiCardHtml("Tiempo generación OC", summary.avgGeneracionOC != null ? `${summary.avgGeneracionOC} d` : "—", "Liberación → OC", source.color)}
+    ${kpiCardHtml("Tiempo liberación OC", summary.avgLiberacionOC != null ? `${summary.avgLiberacionOC} d` : "—", "OC creada → OC liberada", COLOR.amber)}
+    ${kpiCardHtml("Tiempo recepción", summary.avgRecepcion != null ? `${summary.avgRecepcion} d` : "—", "OC liberada → ingreso a bodega", COLOR.purple)}
   </div>`;
 
   const charts = `<div class="panel-row">
@@ -819,11 +819,11 @@ function buildSourceSection(doc, source, snapshot, snapshots, y) {
     startY: y, margin: { left: 40, right: 40 }, theme: "grid",
     head: [["Indicador", "Valor"]],
     body: [
-      ["Tiempo promedio de aprobación", summary.avgAprobacion !== null ? `${summary.avgAprobacion} días` : "—"],
-      ["Tiempo promedio de generación de OC", summary.avgGeneracionOC !== null ? `${summary.avgGeneracionOC} días` : "—"],
-      ["Tiempo promedio de liberación de OC", summary.avgLiberacionOC !== null ? `${summary.avgLiberacionOC} días` : "—"],
-      ["Tiempo promedio de recepción", summary.avgRecepcion !== null ? `${summary.avgRecepcion} días` : "—"],
-      ["Tiempo total promedio", summary.avgTotalCompleto !== null ? `${summary.avgTotalCompleto} días` : "—"],
+      ["Tiempo promedio de aprobación", summary.avgAprobacion != null ? `${summary.avgAprobacion} días` : "—"],
+      ["Tiempo promedio de generación de OC", summary.avgGeneracionOC != null ? `${summary.avgGeneracionOC} días` : "—"],
+      ["Tiempo promedio de liberación de OC", summary.avgLiberacionOC != null ? `${summary.avgLiberacionOC} días` : "—"],
+      ["Tiempo promedio de recepción", summary.avgRecepcion != null ? `${summary.avgRecepcion} días` : "—"],
+      ["Tiempo total promedio", summary.avgTotalCompleto != null ? `${summary.avgTotalCompleto} días` : "—"],
       ["Solicitudes totales", String(summary.totalSolped)],
       ["Líneas de material", String(summary.totalLineas)],
       ["OC creadas", `${summary.conOC} (${summary.totalSolped ? Math.round(100 * summary.conOC / summary.totalSolped) : 0}%)`],
