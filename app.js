@@ -118,6 +118,7 @@ function parseWorkbook(workbook) {
     fechaDocCompras: findIdx(headers, "fecha del documento de compras", 0),
     fechaCreacionOC: findIdx(headers, "fecha de creacion", 0),
     fechaLiberacion: findIdx(headers, "fecha de liberacion", 0),
+    fechaLiberacionOC: findIdx(headers, "fecha de liberacion", 1),
     fechaRecepcionMI: findIdx(headers, "fecha registro de mi", 0),
     moneda: findIdx(headers, "moneda", 0),
   };
@@ -153,12 +154,14 @@ function parseWorkbook(workbook) {
     const dias = tieneOC ? diffDays(fechaSolicitud, fechaOC) : diffDays(fechaSolicitud, hoy);
 
     const fechaLiberacion = toDateSafe(idx.fechaLiberacion !== -1 ? row[idx.fechaLiberacion] : null);
+    const fechaLiberacionOC = toDateSafe(idx.fechaLiberacionOC !== -1 ? row[idx.fechaLiberacionOC] : null);
     const fechaRecepcionMI = toDateSafe(idx.fechaRecepcionMI !== -1 ? row[idx.fechaRecepcionMI] : null);
     const tieneRecepcion = !!fechaRecepcionMI;
 
     const diasAprobacion = fechaLiberacion ? diffDays(fechaSolicitud, fechaLiberacion) : null;
     const diasGeneracionOC = (fechaOC && (fechaLiberacion || fechaSolicitud)) ? diffDays(fechaLiberacion || fechaSolicitud, fechaOC) : null;
-    const diasRecepcion = (fechaOC && fechaRecepcionMI) ? diffDays(fechaOC, fechaRecepcionMI) : null;
+    const diasLiberacionOC = (fechaOC && fechaLiberacionOC) ? diffDays(fechaOC, fechaLiberacionOC) : null;
+    const diasRecepcion = (fechaRecepcionMI && (fechaLiberacionOC || fechaOC)) ? diffDays(fechaLiberacionOC || fechaOC, fechaRecepcionMI) : null;
     const diasTotalCompleto = fechaRecepcionMI ? diffDays(fechaSolicitud, fechaRecepcionMI) : null;
 
     rows.push({
@@ -176,6 +179,7 @@ function parseWorkbook(workbook) {
       ocNumero: tieneOC ? String(ocNumero).trim() : null,
       fechaOC: fechaOC ? fechaOC.toISOString() : null,
       fechaLiberacion: fechaLiberacion ? fechaLiberacion.toISOString() : null,
+      fechaLiberacionOC: fechaLiberacionOC ? fechaLiberacionOC.toISOString() : null,
       fechaRecepcionMI: fechaRecepcionMI ? fechaRecepcionMI.toISOString() : null,
       tieneRecepcion,
       moneda: idx.moneda !== -1 ? row[idx.moneda] : "CLP",
@@ -183,6 +187,7 @@ function parseWorkbook(workbook) {
       dias,
       diasAprobacion,
       diasGeneracionOC,
+      diasLiberacionOC,
       diasRecepcion,
       diasTotalCompleto,
     });
@@ -245,9 +250,10 @@ function computeSummary(rows) {
   const sinRecepcion = rows.filter((r) => r.ocNumero && !r.tieneRecepcion).length;
   const avgAprobacion = avg(rows.map((r) => r.diasAprobacion));
   const avgGeneracionOC = avg(rows.map((r) => r.diasGeneracionOC));
+  const avgLiberacionOC = avg(rows.map((r) => r.diasLiberacionOC));
   const avgRecepcion = avg(rows.map((r) => r.diasRecepcion));
   const avgTotalCompleto = avg(rows.map((r) => r.diasTotalCompleto));
-  return { totalSolped, totalLineas: rows.length, conOC, sinOC, atrasadas, sinRecepcion, avgAprobacion, avgGeneracionOC, avgRecepcion, avgTotalCompleto };
+  return { totalSolped, totalLineas: rows.length, conOC, sinOC, atrasadas, sinRecepcion, avgAprobacion, avgGeneracionOC, avgLiberacionOC, avgRecepcion, avgTotalCompleto };
 }
 
 /* ---------------------------------------------------------------------- */
@@ -360,7 +366,8 @@ function renderSourceDashboard(source, snapshot, snapshots) {
     ${kpiCardHtml("Repuestos por recepcionar", summary.sinRecepcion, "OC creada, sin ingreso a bodega", COLOR.amber)}
     ${kpiCardHtml("Tiempo aprobación", summary.avgAprobacion !== null ? `${summary.avgAprobacion} d` : "—", "Solicitud → liberación", COLOR.blue)}
     ${kpiCardHtml("Tiempo generación OC", summary.avgGeneracionOC !== null ? `${summary.avgGeneracionOC} d` : "—", "Liberación → OC", source.color)}
-    ${kpiCardHtml("Tiempo recepción", summary.avgRecepcion !== null ? `${summary.avgRecepcion} d` : "—", "OC → ingreso a bodega", COLOR.purple)}
+    ${kpiCardHtml("Tiempo liberación OC", summary.avgLiberacionOC !== null ? `${summary.avgLiberacionOC} d` : "—", "OC creada → OC liberada", COLOR.amber)}
+    ${kpiCardHtml("Tiempo recepción", summary.avgRecepcion !== null ? `${summary.avgRecepcion} d` : "—", "OC liberada → ingreso a bodega", COLOR.purple)}
   </div>`;
 
   const charts = `<div class="panel-row">
@@ -561,13 +568,13 @@ function renderCharts(grouped, rows, summary, accent) {
   }
 
   // Tiempos por etapa (promedio en días)
-  const etapas = ["Aprobación", "Generación OC", "Recepción"];
-  const valores = [summary.avgAprobacion, summary.avgGeneracionOC, summary.avgRecepcion];
+  const etapas = ["Aprobación", "Generación OC", "Liberación OC", "Recepción"];
+  const valores = [summary.avgAprobacion, summary.avgGeneracionOC, summary.avgLiberacionOC, summary.avgRecepcion];
   const ctxTiempos = document.getElementById("chartTiempos");
   if (ctxTiempos) {
     CHARTS.chartTiempos = new Chart(ctxTiempos, {
       type: "bar",
-      data: { labels: etapas, datasets: [{ label: "Días promedio", data: valores.map((v) => v ?? 0), backgroundColor: [COLOR.blue, accent, COLOR.purple] }] },
+      data: { labels: etapas, datasets: [{ label: "Días promedio", data: valores.map((v) => v ?? 0), backgroundColor: [COLOR.blue, accent, COLOR.amber, COLOR.purple] }] },
       options: { ...chartDefaults(), plugins: { ...chartDefaults().plugins, legend: { display: false } }, scales: { x: { ticks: { color: COLOR.muted }, grid: { color: "#1F2E32" } }, y: { ticks: { color: COLOR.muted, precision: 0 }, grid: { color: "#1F2E32" } } } },
     });
   }
@@ -812,16 +819,17 @@ function buildSourceSection(doc, source, snapshot, snapshots, y) {
     startY: y, margin: { left: 40, right: 40 }, theme: "grid",
     head: [["Indicador", "Valor"]],
     body: [
+      ["Tiempo promedio de aprobación", summary.avgAprobacion !== null ? `${summary.avgAprobacion} días` : "—"],
+      ["Tiempo promedio de generación de OC", summary.avgGeneracionOC !== null ? `${summary.avgGeneracionOC} días` : "—"],
+      ["Tiempo promedio de liberación de OC", summary.avgLiberacionOC !== null ? `${summary.avgLiberacionOC} días` : "—"],
+      ["Tiempo promedio de recepción", summary.avgRecepcion !== null ? `${summary.avgRecepcion} días` : "—"],
+      ["Tiempo total promedio", summary.avgTotalCompleto !== null ? `${summary.avgTotalCompleto} días` : "—"],
       ["Solicitudes totales", String(summary.totalSolped)],
       ["Líneas de material", String(summary.totalLineas)],
       ["OC creadas", `${summary.conOC} (${summary.totalSolped ? Math.round(100 * summary.conOC / summary.totalSolped) : 0}%)`],
       ["Sin OC (backlog)", String(summary.sinOC)],
       ["Solicitudes pendientes atrasadas (> " + DIAS_ALERTA + " días)", String(summary.atrasadas)],
       ["Repuestos con OC sin recepcionar", String(summary.sinRecepcion)],
-      ["Tiempo promedio de aprobación (solicitud → liberación)", summary.avgAprobacion !== null ? `${summary.avgAprobacion} días` : "—"],
-      ["Tiempo promedio de generación de OC (liberación → OC)", summary.avgGeneracionOC !== null ? `${summary.avgGeneracionOC} días` : "—"],
-      ["Tiempo promedio de recepción (OC → ingreso a bodega)", summary.avgRecepcion !== null ? `${summary.avgRecepcion} días` : "—"],
-      ["Tiempo total promedio (solicitud → recepción, ciclo completo)", summary.avgTotalCompleto !== null ? `${summary.avgTotalCompleto} días` : "—"],
     ],
     headStyles: { fillColor: [17, 27, 30], textColor: 255, fontSize: 9 },
     styles: { fontSize: 8.5, textColor: [40, 50, 52] },
