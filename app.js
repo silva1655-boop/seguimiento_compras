@@ -117,6 +117,8 @@ function parseWorkbook(workbook) {
     claseDocOC: findIdx(headers, "clase de documento", 1),
     fechaDocCompras: findIdx(headers, "fecha del documento de compras", 0),
     fechaCreacionOC: findIdx(headers, "fecha de creacion", 0),
+    fechaLiberacion: findIdx(headers, "fecha de liberacion", 0),
+    fechaRecepcionMI: findIdx(headers, "fecha registro de mi", 0),
     moneda: findIdx(headers, "moneda", 0),
   };
 
@@ -150,6 +152,15 @@ function parseWorkbook(workbook) {
     const hoy = new Date();
     const dias = tieneOC ? diffDays(fechaSolicitud, fechaOC) : diffDays(fechaSolicitud, hoy);
 
+    const fechaLiberacion = toDateSafe(idx.fechaLiberacion !== -1 ? row[idx.fechaLiberacion] : null);
+    const fechaRecepcionMI = toDateSafe(idx.fechaRecepcionMI !== -1 ? row[idx.fechaRecepcionMI] : null);
+    const tieneRecepcion = !!fechaRecepcionMI;
+
+    const diasAprobacion = fechaLiberacion ? diffDays(fechaSolicitud, fechaLiberacion) : null;
+    const diasGeneracionOC = (fechaOC && (fechaLiberacion || fechaSolicitud)) ? diffDays(fechaLiberacion || fechaSolicitud, fechaOC) : null;
+    const diasRecepcion = (fechaOC && fechaRecepcionMI) ? diffDays(fechaOC, fechaRecepcionMI) : null;
+    const diasTotalCompleto = fechaRecepcionMI ? diffDays(fechaSolicitud, fechaRecepcionMI) : null;
+
     rows.push({
       solped: String(solped).trim(),
       posicion: idx.posicion !== -1 ? row[idx.posicion] : null,
@@ -164,9 +175,16 @@ function parseWorkbook(workbook) {
       claseDocOC: idx.claseDocOC !== -1 ? row[idx.claseDocOC] : null,
       ocNumero: tieneOC ? String(ocNumero).trim() : null,
       fechaOC: fechaOC ? fechaOC.toISOString() : null,
+      fechaLiberacion: fechaLiberacion ? fechaLiberacion.toISOString() : null,
+      fechaRecepcionMI: fechaRecepcionMI ? fechaRecepcionMI.toISOString() : null,
+      tieneRecepcion,
       moneda: idx.moneda !== -1 ? row[idx.moneda] : "CLP",
       estado,
       dias,
+      diasAprobacion,
+      diasGeneracionOC,
+      diasRecepcion,
+      diasTotalCompleto,
     });
   }
   return rows;
@@ -213,16 +231,23 @@ function groupBySolped(rows) {
   });
 }
 
+function avg(arr) {
+  const vals = arr.filter((d) => d !== null && d !== undefined);
+  return vals.length ? Math.round(vals.reduce((a, b) => a + b, 0) / vals.length) : null;
+}
+
 function computeSummary(rows) {
   const grouped = groupBySolped(rows);
   const totalSolped = grouped.length;
   const conOC = grouped.filter((g) => g.estado === ESTADOS.OC_CREADA).length;
   const sinOC = totalSolped - conOC;
-  const montoTotal = rows.reduce((a, r) => a + (r.monto || 0), 0);
-  const leadTimes = grouped.filter((g) => g.estado === ESTADOS.OC_CREADA && g.dias !== null).map((g) => g.dias);
-  const avgLead = leadTimes.length ? Math.round(leadTimes.reduce((a, b) => a + b, 0) / leadTimes.length) : null;
   const atrasadas = grouped.filter((g) => g.estado !== ESTADOS.OC_CREADA && g.dias !== null && g.dias > DIAS_ALERTA).length;
-  return { totalSolped, totalLineas: rows.length, conOC, sinOC, montoTotal, avgLead, atrasadas };
+  const sinRecepcion = rows.filter((r) => r.ocNumero && !r.tieneRecepcion).length;
+  const avgAprobacion = avg(rows.map((r) => r.diasAprobacion));
+  const avgGeneracionOC = avg(rows.map((r) => r.diasGeneracionOC));
+  const avgRecepcion = avg(rows.map((r) => r.diasRecepcion));
+  const avgTotalCompleto = avg(rows.map((r) => r.diasTotalCompleto));
+  return { totalSolped, totalLineas: rows.length, conOC, sinOC, atrasadas, sinRecepcion, avgAprobacion, avgGeneracionOC, avgRecepcion, avgTotalCompleto };
 }
 
 /* ---------------------------------------------------------------------- */
@@ -331,15 +356,17 @@ function renderSourceDashboard(source, snapshot, snapshots) {
   const kpis = `<div class="kpi-row">
     ${kpiCardHtml("Solicitudes", summary.totalSolped, `${summary.totalLineas} líneas de material`, COLOR.blue)}
     ${kpiCardHtml("OC creadas", `${summary.conOC} (${summary.totalSolped ? Math.round(100 * summary.conOC / summary.totalSolped) : 0}%)`, `${summary.sinOC} aún sin OC`, source.color)}
-    ${kpiCardHtml("Tiempo promedio a OC", summary.avgLead !== null ? `${summary.avgLead} d` : "—", "Solicitud → OC", COLOR.amber)}
-    ${kpiCardHtml("Atrasadas", summary.atrasadas, `&gt; ${DIAS_ALERTA} días sin OC`, COLOR.red)}
-    ${kpiCardHtml("Monto total", fmtMoney(summary.montoTotal), "Suma monto neto", COLOR.muted)}
+    ${kpiCardHtml("Pendientes atrasadas", summary.atrasadas, `&gt; ${DIAS_ALERTA} días sin OC`, COLOR.red)}
+    ${kpiCardHtml("Repuestos por recepcionar", summary.sinRecepcion, "OC creada, sin ingreso a bodega", COLOR.amber)}
+    ${kpiCardHtml("Tiempo aprobación", summary.avgAprobacion !== null ? `${summary.avgAprobacion} d` : "—", "Solicitud → liberación", COLOR.blue)}
+    ${kpiCardHtml("Tiempo generación OC", summary.avgGeneracionOC !== null ? `${summary.avgGeneracionOC} d` : "—", "Liberación → OC", source.color)}
+    ${kpiCardHtml("Tiempo recepción", summary.avgRecepcion !== null ? `${summary.avgRecepcion} d` : "—", "OC → ingreso a bodega", COLOR.purple)}
   </div>`;
 
   const charts = `<div class="panel-row">
     <div class="panel"><div class="panel-header"><span class="panel-title">Estado de las solicitudes</span></div><div class="chart-box"><canvas id="chartEstado"></canvas></div></div>
     <div class="panel"><div class="panel-header"><span class="panel-title">Solicitudes por mes</span></div><div class="chart-box"><canvas id="chartMensual"></canvas></div></div>
-    <div class="panel"><div class="panel-header"><span class="panel-title">Monto por proveedor (top 8)</span></div><div class="chart-box"><canvas id="chartProveedor"></canvas></div></div>
+    <div class="panel"><div class="panel-header"><span class="panel-title">Tiempos por etapa (promedio, días)</span></div><div class="chart-box"><canvas id="chartTiempos"></canvas></div></div>
   </div>`;
 
   const tablePanel = `<div class="panel">
@@ -359,7 +386,7 @@ function renderSourceDashboard(source, snapshot, snapshots) {
     <div class="table-scroll">
       <table>
         <thead><tr>
-          <th>SOLPED</th><th>Material</th><th>Solicitante</th><th>F. Solicitud</th><th>Estado</th><th>Nº OC</th><th class="right">Días</th><th class="right">Monto</th>
+          <th>SOLPED</th><th>Material</th><th>Solicitante</th><th>F. Solicitud</th><th>Estado</th><th>Nº OC</th><th class="right">Días</th>
         </tr></thead>
         <tbody id="tableBody"></tbody>
       </table>
@@ -367,13 +394,68 @@ function renderSourceDashboard(source, snapshot, snapshots) {
     </div>
   </div>`;
 
+  const pendientesPanel = pendientesPanelHtml(grouped);
+  const sinRecepcionPanel = sinRecepcionPanelHtml(rows);
   const historySection = historySectionHtml(snapshots, source.color);
 
-  document.getElementById("content").innerHTML = viewingBar + kpis + charts + tablePanel + historySection;
-  renderCharts(grouped, rows, source.color);
+  document.getElementById("content").innerHTML = viewingBar + kpis + charts + tablePanel + pendientesPanel + sinRecepcionPanel + historySection;
+  renderCharts(grouped, rows, summary, source.color);
   renderTableBody();
   renderHistoryChart(snapshots, source.color);
   wireDropzones();
+}
+
+/* ---------------------------------------------------------------------- */
+/* Solicitudes pendientes (todas, ordenadas por días de mayor a menor)      */
+/* ---------------------------------------------------------------------- */
+function getPendientesGrouped(grouped) {
+  return grouped.filter((g) => g.estado !== ESTADOS.OC_CREADA).sort((a, b) => (b.dias ?? -1) - (a.dias ?? -1));
+}
+
+function pendientesPanelHtml(grouped) {
+  const list = getPendientesGrouped(grouped);
+  return `<div class="panel" style="margin-top:16px">
+    <div class="panel-header"><span class="panel-title">⏳ Solicitudes pendientes (${list.length}) — mayor a menor retraso</span></div>
+    <div class="table-scroll"><table>
+      <thead><tr><th>SOLPED</th><th>Material</th><th>Solicitante</th><th>F. Solicitud</th><th>Estado</th><th class="right">Días</th></tr></thead>
+      <tbody>${list.length ? list.map((g) => `<tr>
+        <td class="mono" style="color:${COLOR.blue}">${escapeHtml(g.solped)}</td>
+        <td style="max-width:260px">${escapeHtml(g.material)}</td>
+        <td class="muted">${escapeHtml(g.solicitante)}</td>
+        <td class="mono muted">${fmtDate(g.fechaSolicitud)}</td>
+        <td>${badgeHtml(g.estado)}</td>
+        <td class="mono right" style="color:${g.dias > DIAS_ALERTA ? COLOR.red : "var(--muted)"}">${g.dias !== null ? g.dias : "—"}</td>
+      </tr>`).join("") : `<tr><td colspan="6" class="empty-note">No hay solicitudes pendientes — todo con OC creada.</td></tr>`}</tbody>
+    </table></div>
+  </div>`;
+}
+
+/* ---------------------------------------------------------------------- */
+/* OC liberadas sin recepción de repuesto (seguimiento a la entrega)        */
+/* ---------------------------------------------------------------------- */
+function getSinRecepcionRows(rows) {
+  const hoy = new Date();
+  return rows.filter((r) => r.ocNumero && !r.tieneRecepcion)
+    .map((r) => ({ ...r, diasDesdeOC: diffDays(rd(r, "fechaOC"), hoy) }))
+    .sort((a, b) => (b.diasDesdeOC ?? -1) - (a.diasDesdeOC ?? -1));
+}
+
+function sinRecepcionPanelHtml(rows) {
+  const list = getSinRecepcionRows(rows);
+  return `<div class="panel" style="margin-top:16px">
+    <div class="panel-header"><span class="panel-title">📦 OC liberadas sin recepción de repuesto (${list.length})</span></div>
+    <div class="table-scroll"><table>
+      <thead><tr><th>SOLPED</th><th>Material</th><th>Proveedor</th><th>Nº OC</th><th>Fecha OC</th><th class="right">Días desde OC</th></tr></thead>
+      <tbody>${list.length ? list.map((r) => `<tr class="${r.diasDesdeOC > DIAS_ALERTA ? "alert-row" : ""}">
+        <td class="mono" style="color:${COLOR.blue}">${escapeHtml(r.solped)}${r.posicion ? `-${r.posicion}` : ""}</td>
+        <td style="max-width:260px">${escapeHtml(r.material)}</td>
+        <td class="muted mono">${escapeHtml(r.proveedor || "—")}</td>
+        <td class="mono muted">${escapeHtml(r.ocNumero)}</td>
+        <td class="mono muted">${fmtDate(rd(r, "fechaOC"))}</td>
+        <td class="mono right" style="color:${r.diasDesdeOC > DIAS_ALERTA ? COLOR.red : "var(--muted)"}">${r.diasDesdeOC !== null ? r.diasDesdeOC : "—"}</td>
+      </tr>`).join("") : `<tr><td colspan="6" class="empty-note">Todos los repuestos con OC ya fueron recepcionados.</td></tr>`}</tbody>
+    </table></div>
+  </div>`;
 }
 
 /* ---------------------------------------------------------------------- */
@@ -407,7 +489,6 @@ function renderTableBody() {
     const fecha = fmtDate(rowDate(r));
     const solpedLabel = r.solped + (UI.view === "linea" && r.posicion ? `-${r.posicion}` : "");
     const ocLabel = r.ocNumero || (UI.view === "solped" ? `${r.conOC}/${r.numLineas}` : "—");
-    const montoVal = r.montoTotal !== undefined ? r.montoTotal : r.monto;
     return `<tr class="${isAlert ? "alert-row" : ""}">
       <td class="mono" style="color:${COLOR.blue}">${escapeHtml(solpedLabel)}</td>
       <td style="max-width:260px">${escapeHtml(r.material)}</td>
@@ -416,7 +497,6 @@ function renderTableBody() {
       <td>${badgeHtml(r.estado)}</td>
       <td class="mono muted">${escapeHtml(ocLabel)}</td>
       <td class="mono right" style="color:${isAlert ? COLOR.red : "var(--muted)"};font-weight:${isAlert ? 700 : 400}">${r.dias !== null ? r.dias : "—"}</td>
-      <td class="mono right">${fmtMoney(montoVal)}</td>
     </tr>`;
   }).join("");
   const note = document.getElementById("tableEmptyNote");
@@ -439,8 +519,8 @@ function chartDefaults() {
   };
 }
 
-function renderCharts(grouped, rows, accent) {
-  ["chartEstado", "chartMensual", "chartProveedor"].forEach(destroyChart);
+function renderCharts(grouped, rows, summary, accent) {
+  ["chartEstado", "chartMensual", "chartTiempos"].forEach(destroyChart);
 
   // Estado doughnut
   const estadoCounts = {};
@@ -480,16 +560,15 @@ function renderCharts(grouped, rows, accent) {
     });
   }
 
-  // Provider bar (horizontal)
-  const provMap = new Map();
-  rows.forEach((r) => { if (r.proveedor) provMap.set(r.proveedor, (provMap.get(r.proveedor) || 0) + (r.monto || 0)); });
-  const provTop = Array.from(provMap.entries()).sort((a, b) => b[1] - a[1]).slice(0, 8);
-  const ctxProv = document.getElementById("chartProveedor");
-  if (ctxProv) {
-    CHARTS.chartProveedor = new Chart(ctxProv, {
+  // Tiempos por etapa (promedio en días)
+  const etapas = ["Aprobación", "Generación OC", "Recepción"];
+  const valores = [summary.avgAprobacion, summary.avgGeneracionOC, summary.avgRecepcion];
+  const ctxTiempos = document.getElementById("chartTiempos");
+  if (ctxTiempos) {
+    CHARTS.chartTiempos = new Chart(ctxTiempos, {
       type: "bar",
-      data: { labels: provTop.map((p) => p[0]), datasets: [{ data: provTop.map((p) => p[1]), backgroundColor: COLOR.purple }] },
-      options: { ...chartDefaults(), indexAxis: "y", plugins: { ...chartDefaults().plugins, legend: { display: false } }, scales: { x: { ticks: { color: COLOR.muted, callback: (v) => "$" + (v / 1000).toFixed(0) + "k" }, grid: { color: "#1F2E32" } }, y: { ticks: { color: COLOR.muted, font: { family: "monospace", size: 10 } }, grid: { display: false } } } },
+      data: { labels: etapas, datasets: [{ label: "Días promedio", data: valores.map((v) => v ?? 0), backgroundColor: [COLOR.blue, accent, COLOR.purple] }] },
+      options: { ...chartDefaults(), plugins: { ...chartDefaults().plugins, legend: { display: false } }, scales: { x: { ticks: { color: COLOR.muted }, grid: { color: "#1F2E32" } }, y: { ticks: { color: COLOR.muted, precision: 0 }, grid: { color: "#1F2E32" } } } },
     });
   }
 }
@@ -503,7 +582,7 @@ function historySectionHtml(snapshots, accent) {
     <div class="chart-box small"><canvas id="chartHistorial"></canvas></div>
     <div class="table-scroll" style="margin-top:10px">
       <table>
-        <thead><tr><th>Semana</th><th>Fecha carga</th><th>Archivo</th><th>Solicitudes</th><th>Con OC</th><th>Backlog</th><th>Atrasadas</th><th>Monto</th><th></th></tr></thead>
+        <thead><tr><th>Semana</th><th>Fecha carga</th><th>Archivo</th><th>Solicitudes</th><th>Con OC</th><th>Backlog</th><th>Atrasadas</th><th></th></tr></thead>
         <tbody>${snapshots.map((s, i) => historyRowHtml(s, snapshots[i + 1])).join("")}</tbody>
       </table>
     </div>
@@ -521,7 +600,6 @@ function historyRowHtml(s, prev) {
     <td class="mono" style="color:${COLOR.teal}">${s.summary.conOC}</td>
     <td class="mono" style="color:${s.summary.sinOC > 0 ? COLOR.red : "var(--muted)"}">${s.summary.sinOC}</td>
     <td class="mono" style="color:${s.summary.atrasadas > 0 ? COLOR.amber : "var(--muted)"}">${s.summary.atrasadas}</td>
-    <td class="mono">${fmtMoney(s.summary.montoTotal)}</td>
     <td>
       ${s.rows ? `<button class="icon-btn" data-action="select-snapshot" data-id="${s.id}" title="Ver detalle de esta semana">👁</button>` : `<span class="muted-dark" title="Solo resumen">👁</span>`}
       <button class="icon-btn" data-action="delete-snapshot" data-id="${s.id}" title="Eliminar snapshot">🗑</button>
@@ -561,14 +639,14 @@ function renderConsolidado() {
   const latest = activeSources.map((s) => ({ ...s, summary: STATE.sources[s.key].snapshots[0].summary, weekLabel: STATE.sources[s.key].snapshots[0].weekLabel }));
   const combined = latest.reduce((acc, s) => ({
     totalSolped: acc.totalSolped + s.summary.totalSolped, conOC: acc.conOC + s.summary.conOC, sinOC: acc.sinOC + s.summary.sinOC,
-    atrasadas: acc.atrasadas + s.summary.atrasadas, montoTotal: acc.montoTotal + s.summary.montoTotal,
-  }), { totalSolped: 0, conOC: 0, sinOC: 0, atrasadas: 0, montoTotal: 0 });
+    atrasadas: acc.atrasadas + s.summary.atrasadas, sinRecepcion: acc.sinRecepcion + (s.summary.sinRecepcion || 0),
+  }), { totalSolped: 0, conOC: 0, sinOC: 0, atrasadas: 0, sinRecepcion: 0 });
 
   const kpis = `<div class="kpi-row">
     ${kpiCardHtml("Solicitudes (todas)", combined.totalSolped, `${activeSources.length}/3 fuentes cargadas`, COLOR.blue)}
     ${kpiCardHtml("OC creadas", `${combined.conOC} (${combined.totalSolped ? Math.round(100 * combined.conOC / combined.totalSolped) : 0}%)`, `${combined.sinOC} sin OC`, COLOR.teal)}
-    ${kpiCardHtml("Atrasadas", combined.atrasadas, `&gt; ${DIAS_ALERTA} días sin OC`, COLOR.red)}
-    ${kpiCardHtml("Monto total", fmtMoney(combined.montoTotal), "Taller + Esperanza + Dalka", COLOR.muted)}
+    ${kpiCardHtml("Pendientes atrasadas", combined.atrasadas, `&gt; ${DIAS_ALERTA} días sin OC`, COLOR.red)}
+    ${kpiCardHtml("Repuestos por recepcionar", combined.sinRecepcion, "OC creada, sin ingreso a bodega", COLOR.amber)}
   </div>`;
 
   const actionBar = `<div class="viewing-bar"><div></div><button class="btn primary" data-action="generate-pdf" data-source="consolidado">⬇ Generar informe PDF consolidado</button></div>`;
@@ -580,7 +658,7 @@ function renderConsolidado() {
 
   const table = `<div class="panel"><div class="panel-header"><span class="panel-title">Resumen por fuente (última semana cargada)</span></div>
     <div class="table-scroll"><table>
-      <thead><tr><th>Fuente</th><th>Semana</th><th>Solicitudes</th><th>Con OC</th><th>Sin OC</th><th>Atrasadas</th><th>Monto</th></tr></thead>
+      <thead><tr><th>Fuente</th><th>Semana</th><th>Solicitudes</th><th>Con OC</th><th>Sin OC</th><th>Atrasadas</th><th>Sin recepción</th></tr></thead>
       <tbody>${latest.map((s) => `<tr>
         <td style="font-weight:600;color:${s.color}">${s.label}</td>
         <td class="mono muted">${s.weekLabel}</td>
@@ -588,7 +666,7 @@ function renderConsolidado() {
         <td class="mono" style="color:${COLOR.teal}">${s.summary.conOC}</td>
         <td class="mono" style="color:${s.summary.sinOC ? COLOR.red : "var(--muted)"}">${s.summary.sinOC}</td>
         <td class="mono" style="color:${s.summary.atrasadas ? COLOR.amber : "var(--muted)"}">${s.summary.atrasadas}</td>
-        <td class="mono">${fmtMoney(s.summary.montoTotal)}</td>
+        <td class="mono" style="color:${s.summary.sinRecepcion ? COLOR.amber : "var(--muted)"}">${s.summary.sinRecepcion ?? "—"}</td>
       </tr>`).join("")}</tbody>
     </table></div>
   </div>`;
@@ -738,13 +816,16 @@ function buildSourceSection(doc, source, snapshot, snapshots, y) {
       ["Líneas de material", String(summary.totalLineas)],
       ["OC creadas", `${summary.conOC} (${summary.totalSolped ? Math.round(100 * summary.conOC / summary.totalSolped) : 0}%)`],
       ["Sin OC (backlog)", String(summary.sinOC)],
-      ["Solicitudes atrasadas (> " + DIAS_ALERTA + " días)", String(summary.atrasadas)],
-      ["Tiempo promedio solicitud → OC", summary.avgLead !== null ? `${summary.avgLead} días` : "—"],
-      ["Monto total", fmtMoney(summary.montoTotal)],
+      ["Solicitudes pendientes atrasadas (> " + DIAS_ALERTA + " días)", String(summary.atrasadas)],
+      ["Repuestos con OC sin recepcionar", String(summary.sinRecepcion)],
+      ["Tiempo promedio de aprobación (solicitud → liberación)", summary.avgAprobacion !== null ? `${summary.avgAprobacion} días` : "—"],
+      ["Tiempo promedio de generación de OC (liberación → OC)", summary.avgGeneracionOC !== null ? `${summary.avgGeneracionOC} días` : "—"],
+      ["Tiempo promedio de recepción (OC → ingreso a bodega)", summary.avgRecepcion !== null ? `${summary.avgRecepcion} días` : "—"],
+      ["Tiempo total promedio (solicitud → recepción, ciclo completo)", summary.avgTotalCompleto !== null ? `${summary.avgTotalCompleto} días` : "—"],
     ],
     headStyles: { fillColor: [17, 27, 30], textColor: 255, fontSize: 9 },
     styles: { fontSize: 8.5, textColor: [40, 50, 52] },
-    columnStyles: { 0: { cellWidth: 260 } },
+    columnStyles: { 0: { cellWidth: 300 } },
   });
   y = doc.lastAutoTable.finalY + 22;
 
@@ -761,30 +842,29 @@ function buildSourceSection(doc, source, snapshot, snapshots, y) {
   });
   y = doc.lastAutoTable.finalY + 22;
 
-  // Solicitudes atrasadas
-  const atrasadas = grouped.filter((g) => g.estado !== ESTADOS.OC_CREADA && g.dias !== null && g.dias > DIAS_ALERTA).sort((a, b) => b.dias - a.dias);
-  y = sectionTitle(doc, `Solicitudes atrasadas (${atrasadas.length})`, y);
+  // Solicitudes pendientes (todas, mayor a menor retraso)
+  const pendientes = getPendientesGrouped(grouped);
+  y = sectionTitle(doc, `Solicitudes pendientes (${pendientes.length}) — mayor a menor retraso`, y);
   doc.autoTable({
     startY: y, margin: { left: 40, right: 40 }, theme: "grid",
     head: [["SOLPED", "Material", "Solicitante", "F. Solicitud", "Estado", "Días"]],
-    body: atrasadas.length ? atrasadas.map((g) => [g.solped, g.material, g.solicitante, fmtDate(g.fechaSolicitud), g.estado, String(g.dias)]) : [["—", "Sin solicitudes atrasadas", "", "", "", ""]],
+    body: pendientes.length ? pendientes.map((g) => [g.solped, g.material, g.solicitante, fmtDate(g.fechaSolicitud), g.estado, g.dias !== null ? String(g.dias) : "—"]) : [["—", "Sin solicitudes pendientes", "", "", "", ""]],
     headStyles: { fillColor: [74, 31, 34], textColor: 255, fontSize: 9 },
     styles: { fontSize: 8, textColor: [40, 50, 52] },
     columnStyles: { 1: { cellWidth: 160 } },
   });
   y = doc.lastAutoTable.finalY + 22;
 
-  // Ranking proveedores
-  const provMap = new Map();
-  snapshot.rows.forEach((r) => { if (r.proveedor) provMap.set(r.proveedor, (provMap.get(r.proveedor) || 0) + (r.monto || 0)); });
-  const provTop = Array.from(provMap.entries()).sort((a, b) => b[1] - a[1]).slice(0, 10);
-  y = sectionTitle(doc, "Ranking de proveedores por monto", y);
+  // OC liberadas sin recepción de repuesto
+  const sinRecepcion = getSinRecepcionRows(snapshot.rows);
+  y = sectionTitle(doc, `OC liberadas sin recepción de repuesto (${sinRecepcion.length})`, y);
   doc.autoTable({
     startY: y, margin: { left: 40, right: 40 }, theme: "grid",
-    head: [["Proveedor", "Monto"]],
-    body: provTop.map((p) => [p[0], fmtMoney(p[1])]),
-    headStyles: { fillColor: [17, 27, 30], textColor: 255, fontSize: 9 },
-    styles: { fontSize: 8.5, textColor: [40, 50, 52] },
+    head: [["SOLPED", "Material", "Proveedor", "Nº OC", "Fecha OC", "Días desde OC"]],
+    body: sinRecepcion.length ? sinRecepcion.map((r) => [r.solped + (r.posicion ? `-${r.posicion}` : ""), r.material, r.proveedor || "—", r.ocNumero, fmtDate(rd(r, "fechaOC")), r.diasDesdeOC !== null ? String(r.diasDesdeOC) : "—"]) : [["—", "Todo recepcionado", "", "", "", ""]],
+    headStyles: { fillColor: [77, 58, 22], textColor: 255, fontSize: 9 },
+    styles: { fontSize: 8, textColor: [40, 50, 52] },
+    columnStyles: { 1: { cellWidth: 150 } },
   });
   y = doc.lastAutoTable.finalY + 22;
 
@@ -793,8 +873,8 @@ function buildSourceSection(doc, source, snapshot, snapshots, y) {
     y = sectionTitle(doc, "Historial semanal", y);
     doc.autoTable({
       startY: y, margin: { left: 40, right: 40 }, theme: "grid",
-      head: [["Semana", "Fecha carga", "Solicitudes", "Con OC", "Sin OC", "Atrasadas", "Monto"]],
-      body: snapshots.map((s) => [s.weekLabel, fmtDate(new Date(s.date)), String(s.summary.totalSolped), String(s.summary.conOC), String(s.summary.sinOC), String(s.summary.atrasadas), fmtMoney(s.summary.montoTotal)]),
+      head: [["Semana", "Fecha carga", "Solicitudes", "Con OC", "Sin OC", "Atrasadas"]],
+      body: snapshots.map((s) => [s.weekLabel, fmtDate(new Date(s.date)), String(s.summary.totalSolped), String(s.summary.conOC), String(s.summary.sinOC), String(s.summary.atrasadas)]),
       headStyles: { fillColor: [17, 27, 30], textColor: 255, fontSize: 9 },
       styles: { fontSize: 8.5, textColor: [40, 50, 52] },
     });
@@ -805,13 +885,13 @@ function buildSourceSection(doc, source, snapshot, snapshots, y) {
   y = sectionTitle(doc, `Detalle completo de solicitudes (${grouped.length})`, y);
   doc.autoTable({
     startY: y, margin: { left: 40, right: 40 }, theme: "striped",
-    head: [["SOLPED", "Material", "Solicitante", "F. Solicitud", "Estado", "Nº OC / avance", "Días", "Monto"]],
+    head: [["SOLPED", "Material", "Solicitante", "F. Solicitud", "Estado", "Nº OC / avance", "Días"]],
     body: grouped.sort((a, b) => (b.fechaSolicitud || 0) - (a.fechaSolicitud || 0)).map((g) => [
-      g.solped, g.material, g.solicitante, fmtDate(g.fechaSolicitud), g.estado, `${g.conOC}/${g.numLineas}`, g.dias !== null ? String(g.dias) : "—", fmtMoney(g.montoTotal),
+      g.solped, g.material, g.solicitante, fmtDate(g.fechaSolicitud), g.estado, `${g.conOC}/${g.numLineas}`, g.dias !== null ? String(g.dias) : "—",
     ]),
     headStyles: { fillColor: [17, 27, 30], textColor: 255, fontSize: 8.5 },
     styles: { fontSize: 7.5, textColor: [40, 50, 52] },
-    columnStyles: { 1: { cellWidth: 140 } },
+    columnStyles: { 1: { cellWidth: 160 } },
   });
   return doc.lastAutoTable.finalY + 30;
 }
@@ -838,8 +918,8 @@ function generateConsolidadoReport() {
   const latest = activeSources.map((s) => ({ ...s, summary: STATE.sources[s.key].snapshots[0].summary, weekLabel: STATE.sources[s.key].snapshots[0].weekLabel }));
   const combined = latest.reduce((acc, s) => ({
     totalSolped: acc.totalSolped + s.summary.totalSolped, conOC: acc.conOC + s.summary.conOC, sinOC: acc.sinOC + s.summary.sinOC,
-    atrasadas: acc.atrasadas + s.summary.atrasadas, montoTotal: acc.montoTotal + s.summary.montoTotal,
-  }), { totalSolped: 0, conOC: 0, sinOC: 0, atrasadas: 0, montoTotal: 0 });
+    atrasadas: acc.atrasadas + s.summary.atrasadas, sinRecepcion: acc.sinRecepcion + (s.summary.sinRecepcion || 0),
+  }), { totalSolped: 0, conOC: 0, sinOC: 0, atrasadas: 0, sinRecepcion: 0 });
 
   y = sectionTitle(doc, "Resumen consolidado", y);
   doc.autoTable({
@@ -849,8 +929,8 @@ function generateConsolidadoReport() {
       ["Solicitudes totales (todas las fuentes)", String(combined.totalSolped)],
       ["OC creadas", `${combined.conOC} (${combined.totalSolped ? Math.round(100 * combined.conOC / combined.totalSolped) : 0}%)`],
       ["Sin OC (backlog)", String(combined.sinOC)],
-      ["Atrasadas (> " + DIAS_ALERTA + " días)", String(combined.atrasadas)],
-      ["Monto total", fmtMoney(combined.montoTotal)],
+      ["Pendientes atrasadas (> " + DIAS_ALERTA + " días)", String(combined.atrasadas)],
+      ["Repuestos con OC sin recepcionar", String(combined.sinRecepcion)],
     ],
     headStyles: { fillColor: [17, 27, 30], textColor: 255, fontSize: 9 },
     styles: { fontSize: 8.5, textColor: [40, 50, 52] },
@@ -860,8 +940,8 @@ function generateConsolidadoReport() {
   y = sectionTitle(doc, "Resumen por fuente", y);
   doc.autoTable({
     startY: y, margin: { left: 40, right: 40 }, theme: "grid",
-    head: [["Fuente", "Semana", "Solicitudes", "Con OC", "Sin OC", "Atrasadas", "Monto"]],
-    body: latest.map((s) => [s.label, s.weekLabel, String(s.summary.totalSolped), String(s.summary.conOC), String(s.summary.sinOC), String(s.summary.atrasadas), fmtMoney(s.summary.montoTotal)]),
+    head: [["Fuente", "Semana", "Solicitudes", "Con OC", "Sin OC", "Atrasadas", "Sin recepción"]],
+    body: latest.map((s) => [s.label, s.weekLabel, String(s.summary.totalSolped), String(s.summary.conOC), String(s.summary.sinOC), String(s.summary.atrasadas), String(s.summary.sinRecepcion ?? "—")]),
     headStyles: { fillColor: [17, 27, 30], textColor: 255, fontSize: 9 },
     styles: { fontSize: 8.5, textColor: [40, 50, 52] },
   });
